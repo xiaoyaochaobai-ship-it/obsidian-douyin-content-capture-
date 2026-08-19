@@ -1,386 +1,727 @@
-# Douyin Capture
+# 抖音内容提取 · Obsidian 插件
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**Language / 语言:** [English](#english) · [中文](#chinese)
+将抖音分享链接或完整分享文案直接导入 Obsidian。
 
----
 
-<h2 id="english">English</h2>
+本插件通过 **Obsidian 插件 + 本地 Python 后端** 完成本地化的抖音内容提取：
 
-Import Douyin (TikTok China) share links or pasted share text into your Obsidian vault. Download no-watermark videos, carousel images, and captions, then create structured notes with titles, hashtags, tags, and frontmatter. Video posts can be transcribed to Simplified Chinese with a local Whisper backend. All media stays on your machine.
 
-> **Required:** This plugin depends on the local Python service [obsidian-content-capture-backend](https://github.com/lyxdream/obsidian-content-capture-backend). Install and run it before using the plugin. Nothing is sent to a cloud service.
+- 视频：解析抖音链接 → 下载无水印视频 → FFmpeg 提取音频 → 本地 Faster-Whisper 转写 → 转换为简体中文
+- 图文：解析作品信息 → 下载全部图片 → 提取抖音 `desc` 文案
+- 自动创建 Obsidian Markdown 笔记
+- 视频、图片和文案均保存在本地
+- 不依赖付费语音 API
+- 不需要登录抖音 Cookie
+- 支持本地 Whisper 模型
 
-### Features
 
-| Capability | Description |
-|------------|-------------|
-| Video posts | No-watermark video download, local Whisper transcription, embedded `video.mp4` in notes |
-| Image posts | Download all images plus caption text from `desc` (no Whisper needed) |
-| Two import modes | **Extract caption** (full pipeline) / **Extract video only** (download video, skip transcription) |
-| Note structure | Title separated from `#hashtags`, tag callout block, frontmatter metadata |
-| Privacy | No Douyin cookie required, no paid speech API, data stays local |
-| Resilience | Notes are still created when captions succeed but video or some images fail to import |
+> **重要：** 本插件需要同时运行本地 Python 后端服务。
 
-Supported link formats: `v.douyin.com` short links, `www.douyin.com/note|video`, `iesdouyin.com/share/...`, or pasted share text containing a link.
-
-### Requirements
-
-| Component | Requirement |
-|-----------|-------------|
-| Obsidian | **Desktop** 1.4.0+ (mobile not supported) |
-| Local backend | [obsidian-content-capture-backend](https://github.com/lyxdream/obsidian-content-capture-backend) |
-| Python | 3.10+ (backend) |
-| FFmpeg | Required for **video transcription** only (`brew install ffmpeg`, etc.) |
-| Network | Internet needed to download Douyin assets and the first Whisper model |
-
-Default backend URL: `http://127.0.0.1:5050`
-
-### Quick start
-
-#### 1. Start the local backend
-
-```bash
-git clone https://github.com/lyxdream/obsidian-content-capture-backend.git
-cd obsidian-content-capture-backend
-
-python3 -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-
-# macOS — video transcription
-brew install ffmpeg
-
-python web/app.py
-# Optional: open http://127.0.0.1:5050 in a browser for testing
-```
-
-Keep the terminal running. The plugin cannot extract content after the backend stops.
-
-#### 2. Install this plugin
-
-**From Releases (recommended)**
-
-1. Open [Releases](https://github.com/lyxdream/obsidian-douyin-capture/releases) and download the build for your version (`main.js`, `manifest.json`, `styles.css`).
-2. Extract into your vault:
-
-   ```
-   <Your Vault>/.obsidian/plugins/douyin-capture/
-   ├── main.js
-   ├── manifest.json
-   ├── styles.css
-   └── versions.json   # if included
-   ```
-
-3. Obsidian → **Settings → Community plugins** → turn off Restricted mode → enable **Douyin Capture**.
-
-**From the community catalog**
-
-Settings → Community plugins → Browse → search **Douyin Capture** → Install → Enable.
-
-**Build from source**
-
-```bash
-git clone https://github.com/lyxdream/obsidian-douyin-capture.git
-cd obsidian-douyin-capture
-npm install
-npm run build
-```
-
-Copy the plugin folder (including generated `main.js`) into `.obsidian/plugins/douyin-capture/`, or symlink it during development.
-
-#### 3. Configure the plugin
-
-**Settings → Douyin Capture**
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| Backend URL | `http://127.0.0.1:5050` | Must match `web/app.py` |
-| Whisper model | `small` | Affects video transcription in **Extract caption** only |
-| Note folder | `Douyin` | Relative to vault root |
-| Attachment folder | `attachments/douyin` | Where videos and images are stored |
-| Embed video | On | When off, notes keep a link instead of `![[video]]` |
-| Open note after create | On | Open the new note when import finishes |
-
-The settings page shows backend status (connected / disconnected).
-
-### Usage
-
-**Ribbon icon** — Click the camera icon in the left ribbon to open the **import douyin** modal.
-
-**Modal actions**
-
-1. Paste a Douyin share link or full share text.
-2. Choose:
-   - **Extract caption** — full pipeline (Whisper for videos; images + caption for image posts)
-   - **Extract video** — download no-watermark video only, **no transcription**
-   - **Cancel** — close the modal
-
-Progress steps are shown during extraction (health check → parse/download → write to vault).
-
-**Command palette**
-
-| Command | Description |
-|---------|-------------|
-| Douyin Capture: Create note from URL | Open the import modal |
-| Douyin Capture: Create note from clipboard | Read link from clipboard (full caption extract) |
-| Douyin Capture: Check backend connection | Test `GET /api/health` |
-
-**Generated notes**
-
-- **Path:** `Douyin/2026-06-04-author-title-slug.md`
-- **Body:** level-1 title, hashtag callout, video/images, `## Caption`
-- **Frontmatter:** `type`, `content_type`, `douyin_id`, `author`, `source`, `tags`, etc.
-
-See [`docs/obsidian-plugin-contract.md`](docs/obsidian-plugin-contract.md) for field details and fallback templates.
-
-### Architecture
-
-```
-┌─────────────────┐     HTTP (localhost)     ┌──────────────────────────────┐
-│  Obsidian       │  POST /api/video/extract │  obsidian-content-capture-   │
-│  Douyin Capture │ ───────────────────────► │  backend (Python + Flask)    │
-│  plugin         │ ◄─────────────────────── │  parse / download / Whisper  │
-└────────┬────────┘                          └──────────────────────────────┘
-         │ copy media + write .md
-         ▼
-┌─────────────────┐
-│  Vault          │
-│  Douyin/*.md    │
-│  attachments/…  │
-└─────────────────┘
-```
-
-The plugin calls the API, copies media from `output/` into the vault, and renders Markdown. Core extraction runs in the backend.
-
-### FAQ
-
-| Issue | What to do |
-|-------|------------|
-| Cannot connect to local service | Ensure `python web/app.py` is running; check backend URL and port in settings |
-| UI unchanged after reload | `Cmd+P` → **Reload app without saving**, or disable and re-enable the plugin |
-| Video extract is slow | Local Whisper transcription is expected; try a smaller model (`tiny` / `base`) or **Extract video** first |
-| Old note format | Existing notes are not updated; re-import the link |
-| Text only in images | No OCR yet — only images and `desc` caption are saved |
-| `main.js` missing | Run `npm run build`, or download a Release build |
-
-### Development
-
-```bash
-npm install
-npm run dev      # watch build
-npm run build    # production → main.js
-```
-
-| Path | Role |
-|------|------|
-| `src/main.ts` | Plugin entry, commands, extract flow |
-| `src/modal.ts` | Import modal UI |
-| `src/vaultWriter.ts` | Note and attachment writes |
-| `src/backend.ts` | Backend HTTP client |
-| `docs/obsidian-plugin-contract.md` | Plugin behavior and API contract |
-
-Backend development: [obsidian-content-capture-backend](https://github.com/lyxdream/obsidian-content-capture-backend).
-
-### License and disclaimer
-
-This project is licensed under [MIT](LICENSE).
-
-Douyin content and platform rules belong to the platform. Use this tool for **personal learning and research** only. Do not use it for copyright infringement or terms-of-service violations. The author is not responsible for consequences of using this tool.
 
 ---
 
-<h2 id="chinese">中文</h2>
 
-将抖音分享链接一键导入 Obsidian：在本地提取**视频 / 配图 / 文案**，自动生成结构化笔记。
+## 一、项目组成
 
-> **重要**：本插件依赖本地 Python 后端 [obsidian-content-capture-backend](https://github.com/lyxdream/obsidian-content-capture-backend)，不会在云端处理你的链接或媒体。请先安装并启动后端，再使用插件。
 
-### 功能亮点
+本项目由两个部分组成：
 
-| 能力 | 说明 |
-|------|------|
-| 视频作品 | 无水印视频下载、本地 Whisper 转写简体文案、笔记内嵌入 `video.mp4` |
-| 图文作品 | 下载全部配图 + `desc` 配文（无需 Whisper） |
-| 两种导入方式 | **提取文案**（完整流水线） / **提取视频**（仅下载视频，不转写） |
-| 笔记结构 | 标题与 `#话题` 分离、标签引用块、frontmatter 元数据 |
-| 隐私 | 无需抖音 Cookie、无需付费语音 API，数据留在本机 |
-| 容错 | 文案成功但视频/部分配图导入失败时，仍会创建笔记并给出降级说明 |
 
-支持的链接形式：`v.douyin.com` 短链、`www.douyin.com/note|video`、`iesdouyin.com/share/...`，或直接粘贴整段分享文案。
+### 1. Obsidian 插件
 
-### 环境要求
 
-| 组件 | 要求 |
-|------|------|
-| Obsidian | **桌面版** 1.4.0+（不支持移动端） |
-| 本地后端 | [obsidian-content-capture-backend](https://github.com/lyxdream/obsidian-content-capture-backend) |
-| Python | 3.10+（后端） |
-| FFmpeg | 仅**视频转写**需要（`brew install ffmpeg` 等） |
-| 网络 | 首次 Whisper 需下载模型；解析/下载抖音资源需联网 |
+负责：
 
-默认后端地址：`http://127.0.0.1:5050`
 
-### 快速开始
+- 接收抖音链接
+- 调用本地后端
+- 获取提取结果
+- 将视频、图片复制到 Obsidian Vault
+- 自动创建 Markdown 笔记
+- 管理插件配置
+- 检查本地后端连接状态
 
-#### 1. 启动本地后端
 
-```bash
-git clone https://github.com/lyxdream/obsidian-content-capture-backend.git
-cd obsidian-content-capture-backend
+### 2. 本地 Python 后端
 
-python3 -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
+
+负责：
+
+
+- 抖音分享链接解析
+- 抖音视频 / 图文识别
+- 无水印视频下载
+- 图片下载
+- FFmpeg 音频提取
+- Faster-Whisper 本地语音识别
+- 繁体中文转换为简体中文
+- 向 Obsidian 插件提供 HTTP API
+
+
+整体架构：
+
+
+```text
+┌──────────────────────┐
+│       Obsidian       │
+│   抖音内容提取插件    │
+└──────────┬───────────┘
+           │
+           │ HTTP
+           │ 127.0.0.1:5050
+           ▼
+┌──────────────────────┐
+│     本地 Python 后端   │
+│        Flask          │
+├──────────────────────┤
+│ 抖音链接解析           │
+│ 视频 / 图文识别         │
+│ 无水印视频下载          │
+│ 图片下载               │
+│ FFmpeg 音频处理        │
+│ Faster-Whisper 转写    │
+│ 繁体 → 简体            │
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│      本地文件系统      │
+│      Obsidian Vault   │
+├──────────────────────┤
+│ Markdown 笔记          │
+│ 视频                   │
+│ 图片                   │
+│ 文案                   │
+└──────────────────────┘
+二、主要功能
+功能	说明
+抖音短链	支持 v.douyin.com
+抖音视频链接	支持 www.douyin.com/video/...
+抖音图文链接	支持 www.douyin.com/note/...
+分享文案	支持直接粘贴完整抖音分享文本
+视频下载	下载无水印视频
+图文下载	下载作品中的全部图片
+文案提取	提取视频语音或图文 desc
+Whisper	本地 Faster-Whisper
+简体转换	自动转换为简体中文
+Obsidian 笔记	自动创建 Markdown
+本地处理	数据主要在本机处理
+后端检测	插件自动检测本地服务状态
+三、支持的抖音链接
+
+支持以下形式：
+
+https://v.douyin.com/xxxxx/
+
+
+https://www.douyin.com/video/xxxxxxxxxxxx
+
+
+https://www.douyin.com/note/xxxxxxxxxxxx
+
+
+https://www.iesdouyin.com/share/video/xxxxxxxxxxxx
+
+也支持完整分享文案，例如：
+
+7.48 复制打开抖音，看看这个视频
+https://v.douyin.com/xxxxx/
+
+插件会自动从分享文本中识别抖音链接。
+
+四、视频内容处理流程
+
+对于视频作品：
+
+抖音分享链接
+      ↓
+解析作品信息
+      ↓
+获取无水印视频地址
+      ↓
+下载 video.mp4
+      ↓
+FFmpeg 提取音频
+      ↓
+Faster-Whisper 本地转写
+      ↓
+繁体中文 → 简体中文
+      ↓
+生成 transcript.txt
+      ↓
+写入 Obsidian Markdown
+
+整个语音识别过程使用本地 Whisper 模型。
+
+不需要：
+
+OpenAI Whisper API
+硅基流动等第三方语音 API
+其他付费语音识别服务
+五、图文内容处理流程
+
+对于抖音图文 / Note：
+
+抖音 Note 链接
+      ↓
+解析作品信息
+      ↓
+读取 desc 文案
+      ↓
+获取图片地址
+      ↓
+下载图片
+      ↓
+生成 Obsidian Markdown
+
+图文内容不会调用 Whisper。
+
+当前版本也不进行图片 OCR。
+
+如果图片本身包含文字，插件只保存图片，不会自动识别图片中的文字。
+
+六、本地后端
+
+本项目需要运行本地 Python 后端。
+
+后端默认地址：
+
+http://127.0.0.1:5050
+
+健康检查：
+
+GET /api/health
+
+正常情况下返回类似：
+
+{
+  "api_key_configured": true,
+  "engine": "local",
+  "models": [
+    "tiny",
+    "base",
+    "small",
+    "medium",
+    "large-v2",
+    "large-v3"
+  ],
+  "success": true,
+  "whisper": "faster-whisper"
+}
+七、后端安装
+
+进入后端项目：
+
+cd ~/Downloads/obsidian-content-capture-backend-main
+
+激活虚拟环境：
+
+source .venv/bin/activate
+
+如果还没有安装依赖：
+
 pip install -r requirements.txt
 
-# macOS 视频转写需要
+安装 FFmpeg：
+
 brew install ffmpeg
 
+启动后端：
+
 python web/app.py
-# 浏览器可打开 http://127.0.0.1:5050 做联调
-```
 
-终端保持运行；关闭后插件将无法提取。
+或者：
 
-#### 2. 安装本插件
+./run-web.sh
 
-**方式 A：从 Release 安装（推荐）**
+默认监听：
 
-1. 打开 [Releases](https://github.com/lyxdream/obsidian-douyin-capture/releases)，下载对应版本（需包含 `main.js`、`manifest.json`、`styles.css`）。
-2. 解压到库目录：
+http://127.0.0.1:5050
 
-   ```
-   <你的 Vault>/.obsidian/plugins/douyin-capture/
-   ├── main.js
-   ├── manifest.json
-   ├── styles.css
-   └── versions.json   # 若有
-   ```
+浏览器打开：
 
-3. Obsidian → **设置 → 第三方插件 → 关闭安全模式 → 启用「Douyin Capture」**。
+http://127.0.0.1:5050
 
-**方式 B：社区插件市场**
+如果看到后端页面，说明服务已经启动。
 
-设置 → 第三方插件 → 浏览 → 搜索 **Douyin Capture** → 安装 → 启用。
+八、检查后端是否正常
 
-**方式 C：手动构建**
+可以在终端执行：
 
-```bash
-git clone https://github.com/lyxdream/obsidian-douyin-capture.git
-cd obsidian-douyin-capture
-npm install
+curl http://127.0.0.1:5050/api/health
+
+如果返回：
+
+{
+  "success": true
+}
+
+说明后端正常。
+
+九、Obsidian 插件安装
+方法一：手动安装
+
+下载本项目中的：
+
+main.js
+manifest.json
+styles.css
+
+复制到：
+
+你的 Obsidian Vault/
+└── .obsidian/
+    └── plugins/
+        └── douyin-content-capture/
+            ├── main.js
+            ├── manifest.json
+            └── styles.css
+
+然后：
+
+Obsidian
+→ 设置
+→ 社区插件
+→ 关闭安全模式
+→ 启用抖音内容提取
+十、插件配置
+
+进入：
+
+设置
+→ 社区插件
+→ 抖音内容提取
+
+主要配置：
+
+配置	默认值	说明
+后端地址	http://127.0.0.1:5050	本地 Python 服务
+Whisper 模型	small	视频语音识别模型
+笔记目录	Douyin	生成 Markdown 的目录
+附件目录	attachments/douyin	视频和图片保存位置
+嵌入视频	开启	是否在笔记中直接嵌入视频
+创建后打开笔记	开启	创建完成后自动打开
+
+插件设置页面会显示后端连接状态。
+
+例如：
+
+✓ 后端已连接
+
+或者：
+
+✕ 后端未连接
+十一、Whisper 模型
+
+支持：
+
+tiny
+base
+small
+medium
+large-v2
+large-v3
+
+模型越大：
+
+识别准确率通常越高
+CPU 占用越高
+内存占用越高
+转写速度越慢
+
+推荐：
+
+tiny
+
+适合：
+
+快速测试
+短视频
+对准确率要求不高
+base
+
+适合：
+
+日常快速提取
+普通短视频
+small
+
+推荐作为默认模型。
+
+适合：
+
+中文内容
+OOTD
+口播
+视频文案提取
+medium / large
+
+适合：
+
+对转写准确率要求较高
+长视频
+对性能要求不敏感
+十二、插件使用
+方法一：Ribbon 图标
+
+点击 Obsidian 左侧插件图标。
+
+输入：
+
+抖音分享链接
+
+然后选择：
+
+提取文案
+
+插件会开始处理。
+
+方法二：命令面板
+
+打开：
+
+Cmd + P
+
+搜索：
+
+抖音
+
+可以使用相关命令。
+
+十三、两种提取模式
+1. 提取文案
+
+完整处理：
+
+视频
+解析
+↓
+下载视频
+↓
+提取音频
+↓
+Whisper 转写
+↓
+简体中文
+↓
+生成 Obsidian 笔记
+图文
+解析
+↓
+下载图片
+↓
+读取 desc
+↓
+生成 Obsidian 笔记
+2. 仅提取视频
+
+只下载视频：
+
+解析
+↓
+下载无水印视频
+↓
+写入 Obsidian
+
+不会执行：
+
+FFmpeg
+Whisper
+语音识别
+
+如果只是想保存视频，建议使用这个模式。
+
+十四、生成的 Obsidian 笔记
+
+默认目录：
+
+Douyin/
+
+例如：
+
+Douyin/
+└── 2026-08-19-74282908446-电车变装.md
+
+笔记通常包含：
+
+---
+type: douyin
+content_type: video
+douyin_id: 7666394421184810259
+author: 74282908446
+source: https://www.douyin.com/video/...
+tags:
+  - douyin
+---
+
+
+# 电车变装
+
+
+#电车变装 #地铁穿搭 #ootd
+
+
+![[video.mp4]]
+
+
+## Caption
+
+
+这里是视频转写后的中文文案。
+十五、本地文件结构
+
+后端处理结果会保存到：
+
+output/
+
+视频作品：
+
+output/
+└── {作品ID}_{标题}/
+    ├── video.mp4
+    ├── audio.wav
+    ├── download_url.txt
+    ├── transcript.txt
+    ├── transcript_segments.json
+    └── meta.json
+
+图文作品：
+
+output/
+└── {作品ID}_{标题}/
+    ├── images/
+    │   ├── 01.jpg
+    │   ├── 02.jpg
+    │   └── ...
+    ├── image_urls.txt
+    ├── transcript.txt
+    └── meta.json
+十六、本地 API
+
+Obsidian 插件主要通过 HTTP 调用本地后端。
+
+健康检查
+GET /api/health
+获取作品信息
+POST /api/video/info
+
+请求：
+
+{
+  "url": "https://www.douyin.com/video/xxxxxxxx"
+}
+提取内容
+POST /api/video/extract
+
+请求：
+
+{
+  "url": "https://www.douyin.com/video/xxxxxxxx",
+  "model": "small",
+  "skip_transcribe": false
+}
+
+仅下载视频：
+
+{
+  "url": "https://www.douyin.com/video/xxxxxxxx",
+  "model": "small",
+  "skip_transcribe": true
+}
+下载视频
+GET /api/video/download
+访问处理结果
+GET /files/<path>
+十七、隐私
+
+本项目设计为本地内容处理工具。
+
+主要处理流程：
+
+抖音
+ ↓
+本地 Python 后端
+ ↓
+本地 Whisper
+ ↓
+本地文件
+ ↓
+Obsidian Vault
+
+语音识别不依赖云端语音 API。
+
+Whisper 模型首次使用时需要联网下载模型。
+
+抖音视频和图片下载本身需要访问抖音相关资源。
+
+十八、常见问题
+1. 插件显示后端未连接
+
+检查：
+
+curl http://127.0.0.1:5050/api/health
+
+如果无法访问，启动：
+
+cd ~/Downloads/obsidian-content-capture-backend-main
+
+
+source .venv/bin/activate
+
+
+python web/app.py
+2. 视频提取很慢
+
+这是正常现象。
+
+视频需要：
+
+下载
+→ FFmpeg
+→ Whisper
+→ 中文转换
+
+如果电脑性能有限，可以选择：
+
+tiny
+
+或者：
+
+base
+3. 只想下载视频
+
+使用：
+
+仅提取视频
+
+不会执行 Whisper。
+
+4. 图片中的文字没有被提取
+
+当前版本没有 OCR。
+
+图片中的文字会保留在图片中，但不会自动转换成 Markdown 文本。
+
+5. 修改插件代码后 Obsidian 没有变化
+
+重新构建：
+
 npm run build
-```
 
-将**整个插件目录**（含生成的 `main.js`）放入 `.obsidian/plugins/douyin-capture/`，或在开发时用符号链接指向该目录。
+然后复制新的：
 
-#### 3. 配置插件
+main.js
+manifest.json
+styles.css
 
-**设置 → Douyin Capture**：
+到：
 
-| 选项 | 默认 | 说明 |
-|------|------|------|
-| 后端地址 | `http://127.0.0.1:5050` | 与 `web/app.py` 一致 |
-| Whisper 模型 | `small` | 仅影响「提取文案」中的视频转写；越大越慢越准 |
-| 笔记文件夹 | `Douyin` | 相对 Vault 根目录 |
-| 附件文件夹 | `attachments/douyin` | 视频/图片存放位置 |
-| 嵌入视频 | 开启 | 关闭则笔记内仅保留链接 |
-| 创建后打开笔记 | 开启 | 完成后自动打开新笔记 |
+.obsidian/plugins/douyin-content-capture/
 
-页面顶部会显示后端连接状态（● 已连接 / ● 未连接）。
+然后在 Obsidian 中：
 
-### 使用说明
+Cmd + P
+→ Reload app without saving
+十九、插件开发
 
-**侧边栏** — 点击左侧 Ribbon 的**摄像机图标**，打开 **import douyin** 弹窗。
+进入插件目录：
 
-**弹窗操作**
+cd ~/Downloads/obsidian-douyin-capture-master
 
-1. 粘贴抖音分享链接或整段分享文案
-2. 选择：
-   - **提取文案**：完整流程（视频含 Whisper 转写，图文含配图与配文）
-   - **提取视频**：仅下载无水印视频并写入笔记，**不进行转写**（适合先存视频、稍后再转写）
-   - **取消**：关闭弹窗
+安装依赖：
 
-提取过程中会显示步骤进度（检查服务 → 解析/下载 → 写入 Vault）。
-
-**命令面板**
-
-| 命令 | 说明 |
-|------|------|
-| Douyin Capture：从抖音链接创建笔记 | 打开导入弹窗 |
-| Douyin Capture：从剪贴板创建笔记 | 读取剪贴板中的链接（完整提取文案） |
-| Douyin Capture：检查后端连接 | 测试 `GET /api/health` |
-
-**生成的笔记示例**
-
-- **路径**：`Douyin/2026-06-04-作者-标题摘要.md`
-- **正文**：一级标题 + 话题标签引用块 + 视频/配图 + `## 文案`
-- **Frontmatter**：`type`、`content_type`、`douyin_id`、`author`、`source`、`tags` 等
-
-详细字段与失败降级模板见 [`docs/obsidian-plugin-contract.md`](docs/obsidian-plugin-contract.md)。
-
-### 架构说明
-
-```
-┌─────────────────┐     HTTP (localhost)     ┌──────────────────────────────┐
-│  Obsidian       │  POST /api/video/extract │  obsidian-content-capture-   │
-│  Douyin Capture │ ───────────────────────► │  backend (Python + Flask)    │
-│  插件           │ ◄─────────────────────── │  解析 / 下载 / Whisper       │
-└────────┬────────┘                          └──────────────────────────────┘
-         │ 拷贝 media + 写 .md
-         ▼
-┌─────────────────┐
-│  Vault          │
-│  Douyin/*.md    │
-│  attachments/…  │
-└─────────────────┘
-```
-
-插件只负责调用 API、把 `output/` 中的媒体复制进 Vault、渲染 Markdown；核心能力由后端提供。
-
-### 常见问题
-
-| 现象 | 处理 |
-|------|------|
-| 提示「无法连接本地服务」 | 确认 `python web/app.py` 在运行；检查设置中的后端地址与端口 |
-| 重载插件后界面没变 | `Cmd+P` → **Reload app without saving**；或关闭再启用插件 |
-| 视频提取很慢 | 本地 Whisper 转写属正常，可改用更小模型（`tiny` / `base`）或先用「提取视频」 |
-| 笔记格式是旧的 | 旧笔记不会自动更新，需重新导入一条链接 |
-| 图文题本在图片里 | 当前不做 OCR，仅保存图片与 `desc` 配文 |
-| `main.js` 不存在 | 执行 `npm run build`，或从 Release 下载已构建包 |
-
-### 开发
-
-```bash
 npm install
-npm run dev      # 监听编译
-npm run build    # 生产构建 → main.js
-```
 
-| 路径 | 说明 |
-|------|------|
-| `src/main.ts` | 插件入口、命令、提取流程 |
-| `src/modal.ts` | 导入弹窗 UI |
-| `src/vaultWriter.ts` | 笔记与附件写入 |
-| `src/backend.ts` | 后端 HTTP 客户端 |
-| `docs/obsidian-plugin-contract.md` | 插件行为与 API 约定 |
+开发模式：
 
-后端开发见 [obsidian-content-capture-backend](https://github.com/lyxdream/obsidian-content-capture-backend)。
+npm run dev
 
-### 发布检查清单
+生产构建：
 
-向 [Obsidian 社区插件目录](https://community.obsidian.md) 提交前建议确认：
+npm run build
 
-- [ ] `manifest.json`：`id` = `douyin-capture`，`version` 与 Release tag 一致，`minAppVersion` 正确
-- [ ] `versions.json` 含对应版本键，与 manifest 一致
-- [ ] 已执行 `npm run build`，**Release 附件包含 `main.js`**
-- [ ] README 含英文说明，并注明**必须安装本地后端**
-- [ ] `LICENSE` 与仓库一致（MIT）
-- [ ] 在全新 Vault 中手动安装测试一遍完整流程
+构建完成后会生成：
 
-### 许可与声明
+main.js
+二十、项目结构
+obsidian-douyin-capture/
+│
+├── src/
+│   ├── main.ts
+│   ├── modal.ts
+│   ├── settings.ts
+│   ├── settingTab.ts
+│   ├── backend.ts
+│   └── vaultWriter.ts
+│
+├── docs/
+│   └── obsidian-plugin-contract.md
+│
+├── manifest.json
+├── styles.css
+├── main.js
+├── package.json
+├── package-lock.json
+├── tsconfig.json
+└── esbuild.config.mjs
+二十一、后端项目
 
-本项目采用 [MIT](LICENSE) 许可。
+本插件对应的本地后端项目：
 
-抖音内容与平台规则归原平台所有。请仅将本工具用于**个人学习与研究**，勿用于侵权或违反平台条款的用途。作者不对使用本工具产生的后果承担责任。
+obsidian-content-capture-backend
+
+后端主要负责：
+
+抖音解析
+视频下载
+图片下载
+FFmpeg
+Whisper
+中文转换
+HTTP API
+
+插件负责：
+
+Obsidian UI
+调用 API
+媒体复制
+Markdown 创建
+Vault 管理
+二十二、版本说明
+
+当前项目基于原有 Douyin Capture 项目进行功能调整和本地化改造。
+
+当前版本重点是：
+
+本地 Python 后端
+本地 Faster-Whisper
+抖音视频提取
+抖音图文提取
+Obsidian 本地内容管理
+本地媒体保存
+简体中文转换
+
+后续将继续完善：
+
+内容结构化
+AI 内容分析
+自动标签
+自动分类
+内容摘要
+视频内容理解
+Obsidian 知识库管理
+二十三、版权与免责声明
+
+本项目仅用于个人学习、研究以及内容管理。
+
+请遵守：
+
+抖音平台规则
+内容版权相关法律法规
+Obsidian 使用规则
+所在国家和地区的相关法律
+
+请勿将本工具用于侵犯他人版权、绕过平台限制或其他违法用途。
+
+使用本工具产生的相关责任由使用者自行承担。
